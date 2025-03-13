@@ -19,21 +19,24 @@ import (
 	"time"
 )
 
+type Topic = string
+type SubscriptionSet map[string]*Subscription
+
 type Hub struct {
-	logger        *slog.Logger
-	mux           *http.ServeMux
-	subscriptions map[string]*Subscription
-	rwMu          sync.RWMutex
-	client        *http.Client
+	logger *slog.Logger
+	mux    *http.ServeMux
+	topics map[Topic]SubscriptionSet
+	rwMu   sync.RWMutex
+	client *http.Client
 }
 
 func NewHub(logger *slog.Logger) *Hub {
 	mux := &http.ServeMux{}
 
 	h := &Hub{
-		logger:        logger,
-		mux:           mux,
-		subscriptions: make(map[string]*Subscription),
+		logger: logger,
+		mux:    mux,
+		topics: make(map[Topic]SubscriptionSet),
 		client: &http.Client{
 			Timeout: 5 * time.Second,
 		},
@@ -124,9 +127,12 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 
 	h.rwMu.Lock()
 	if mode == ModeSubscribe {
-		h.subscriptions[subscription.CallbackURL.String()] = &subscription
+		if h.topics[topic] == nil {
+			h.topics[topic] = make(SubscriptionSet)
+		}
+		h.topics[topic][subscription.CallbackURL.String()] = &subscription
 	} else {
-		delete(h.subscriptions, subscription.CallbackURL.String())
+		delete(h.topics[topic], subscription.CallbackURL.String())
 	}
 	h.rwMu.Unlock()
 
@@ -184,9 +190,14 @@ func (h *Hub) verifySubscriptionIntent(ctx context.Context, sub *Subscription, m
 }
 
 func (h *Hub) handlePublish(w http.ResponseWriter, r *http.Request) {
+	topic := r.URL.Query().Get("topic")
+	if topic == "" {
+		topic = "a-topic"
+	}
+
 	h.rwMu.RLock()
-	subs := make([]*Subscription, 0, len(h.subscriptions))
-	for _, s := range h.subscriptions {
+	subs := make([]*Subscription, 0, len(h.topics))
+	for _, s := range h.topics[topic] {
 		subs = append(subs, s)
 	}
 	h.rwMu.RUnlock()
@@ -205,7 +216,7 @@ func (h *Hub) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 		if s.LeaseDeadline.Before(time.Now()) {
 			h.rwMu.Lock()
-			delete(h.subscriptions, callbackStr)
+			delete(h.topics[topic], callbackStr)
 			h.rwMu.Unlock()
 			continue
 		}
