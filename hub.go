@@ -39,11 +39,6 @@ func NewHub(logger *slog.Logger) *Hub {
 		},
 	}
 
-	mux.HandleFunc("GET /a-topic", func(w http.ResponseWriter, r *http.Request) {
-		logger.Debug("a-topic")
-		w.WriteHeader(http.StatusNotImplemented)
-		w.Write([]byte("not implemented"))
-	})
 	mux.HandleFunc("POST /", h.handleSubscribe)
 	mux.HandleFunc("POST /publish", h.handlePublish)
 
