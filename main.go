@@ -28,9 +28,19 @@ func run(ctx context.Context) error {
 
 	mux := &http.ServeMux{}
 	mux.HandleFunc("GET /", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
 		logger.Debug("index")
+		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("meep"))
+	})
+	mux.HandleFunc("GET /a-topic", func(w http.ResponseWriter, r *http.Request) {
+		logger.Debug("a-topic")
+		w.WriteHeader(http.StatusNotImplemented)
+		w.Write([]byte("not implemented"))
+	})
+	mux.HandleFunc("POST /", func(w http.ResponseWriter, r *http.Request) {
+		logger.Debug("post index")
+		w.WriteHeader(http.StatusNotImplemented)
+		w.Write([]byte("not implemented"))
 	})
 
 	s := &http.Server{
