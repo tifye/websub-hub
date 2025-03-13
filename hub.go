@@ -87,6 +87,12 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if topic == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		w.Write([]byte("missing hub.topic"))
+		return
+	}
+
 	callbackUrl, err := url.Parse(callback)
 	if err != nil {
 		w.WriteHeader(http.StatusBadRequest)
