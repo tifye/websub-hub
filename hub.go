@@ -108,13 +108,6 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		leaseDuration = time.Duration(leaseSeconds) * time.Second
 	}
 
-	// secretBytes, err := stringToByteArray(secret)
-	// if err != nil {
-	// 	w.WriteHeader(http.StatusBadRequest)
-	// 	w.Write([]byte(err.Error()))
-	// 	return
-	// }
-
 	subscription := Subscription{
 		CallbackURL:   callbackUrl,
 		Topic:         topic,
@@ -178,6 +171,7 @@ func (h *Hub) verifySubscriptionIntent(ctx context.Context, sub *Subscription, m
 	if err != nil {
 		return err
 	}
+	defer res.Body.Close()
 
 	rChallenge, err := io.ReadAll(res.Body)
 	if err != nil {
@@ -234,9 +228,10 @@ func (h *Hub) handlePublish(w http.ResponseWriter, r *http.Request) {
 			h.logger.Error("failed to notify subscriber", "callback", callbackStr, "err", err)
 			continue
 		}
+		defer res.Body.Close()
 
-		if res.StatusCode > 299 {
-			h.logger.Error("received non success status when notifying subscriber", "callback", callbackStr, "status", res.Status)
+		if res.StatusCode < 200 || res.StatusCode > 299 {
+			h.logger.Error("callback returned non-2xx status", "callback", callbackStr, "status", res.Status)
 		}
 	}
 
