@@ -1,13 +1,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"fmt"
-	"hash"
 	"io"
 	"log/slog"
 	"net/http"
@@ -22,6 +24,7 @@ type Hub struct {
 	mux           *http.ServeMux
 	subscriptions map[string]*Subscription
 	rwMu          sync.RWMutex
+	client        *http.Client
 }
 
 func NewHub(logger *slog.Logger) *Hub {
@@ -31,6 +34,9 @@ func NewHub(logger *slog.Logger) *Hub {
 		logger:        logger,
 		mux:           mux,
 		subscriptions: make(map[string]*Subscription),
+		client: &http.Client{
+			Timeout: 5 * time.Second,
+		},
 	}
 
 	mux.HandleFunc("GET /a-topic", func(w http.ResponseWriter, r *http.Request) {
@@ -39,6 +45,7 @@ func NewHub(logger *slog.Logger) *Hub {
 		w.Write([]byte("not implemented"))
 	})
 	mux.HandleFunc("POST /", h.handleSubscribe)
+	mux.HandleFunc("POST /publish", h.handlePublish)
 
 	return h
 }
@@ -54,11 +61,11 @@ type Subscription struct {
 	Topic         string
 	LeaseDeadline time.Time
 	Lease         time.Duration
-	HMAC          *hash.Hash
+	secret        []byte
 }
 
 func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
-	h.logger.Debug("post index")
+	h.logger.Debug("/subscribe")
 
 	if err := r.ParseForm(); err != nil {
 		h.logger.Debug(err.Error())
@@ -71,8 +78,8 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	mode := r.PostFormValue("hub.mode")
 	topic := r.PostFormValue("hub.topic")
 	lease := r.PostFormValue("hub.lease_seconds")
-	secret := r.PostFormValue("secret")
-	h.logger.Info("subscription request", "callback", callback, "mode", mode, "topic", topic, "lease", lease)
+	secret := r.PostFormValue("hub.secret")
+	h.logger.Info("subscription request", "callback", callback, "mode", mode, "topic", topic, "lease", lease, "secret", secret)
 
 	if mode != ModeSubscribe && mode != ModeUnsubscribe {
 		w.WriteHeader(http.StatusBadRequest)
@@ -101,17 +108,19 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 		leaseDuration = time.Duration(leaseSeconds) * time.Second
 	}
 
-	var mac hash.Hash
-	if secret != "" {
-		mac = hmac.New(sha256.New, []byte(secret))
-	}
+	// secretBytes, err := stringToByteArray(secret)
+	// if err != nil {
+	// 	w.WriteHeader(http.StatusBadRequest)
+	// 	w.Write([]byte(err.Error()))
+	// 	return
+	// }
 
 	subscription := Subscription{
 		CallbackURL:   callbackUrl,
 		Topic:         topic,
 		LeaseDeadline: time.Now().Add(leaseDuration),
 		Lease:         leaseDuration,
-		HMAC:          &mac,
+		secret:        []byte(secret),
 	}
 
 	err = h.verifySubscriptionIntent(r.Context(), &subscription, mode)
@@ -123,7 +132,11 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.rwMu.Lock()
-	h.subscriptions[subscription.CallbackURL.String()] = &subscription
+	if mode == ModeSubscribe {
+		h.subscriptions[subscription.CallbackURL.String()] = &subscription
+	} else {
+		delete(h.subscriptions, subscription.CallbackURL.String())
+	}
 	h.rwMu.Unlock()
 
 	h.logger.Debug(fmt.Sprintf("%+v", subscription))
@@ -161,7 +174,7 @@ func (h *Hub) verifySubscriptionIntent(ctx context.Context, sub *Subscription, m
 	}
 
 	req = req.WithContext(ctx)
-	res, err := http.DefaultClient.Do(req)
+	res, err := h.client.Do(req)
 	if err != nil {
 		return err
 	}
@@ -176,4 +189,55 @@ func (h *Hub) verifySubscriptionIntent(ctx context.Context, sub *Subscription, m
 	}
 
 	return nil
+}
+
+func (h *Hub) handlePublish(w http.ResponseWriter, r *http.Request) {
+	h.logger.Debug("/publish")
+
+	h.rwMu.RLock()
+	subs := make([]*Subscription, 0, len(h.subscriptions))
+	for _, s := range h.subscriptions {
+		subs = append(subs, s)
+	}
+	h.rwMu.RUnlock()
+
+	message := struct {
+		Meep string `json:"meep"`
+		Mino string `json:"mino"`
+	}{
+		Meep: "meep",
+		Mino: "mino",
+	}
+	messageData, _ := json.Marshal(message)
+
+	for _, s := range subs {
+		callbackStr := s.CallbackURL.String()
+
+		req, err := http.NewRequest("POST", s.CallbackURL.String(), bytes.NewReader(messageData))
+		if err != nil {
+			h.logger.Error(err.Error(), "callback", callbackStr, "err", err)
+			continue
+		}
+
+		if len(s.secret) > 0 {
+			mac := hmac.New(sha256.New, s.secret)
+			if _, err := mac.Write(messageData); err != nil {
+				h.logger.Error(err.Error(), "callback", callbackStr)
+			}
+			sig := "sha256=" + hex.EncodeToString(mac.Sum(nil))
+			req.Header.Add("X-Hub-Signature", sig)
+			h.logger.Debug(sig)
+		}
+
+		res, err := h.client.Do(req)
+		if err != nil {
+			h.logger.Error("failed to notify subscriber", "callback", callbackStr, "err", err)
+			continue
+		}
+
+		if res.StatusCode > 299 {
+			h.logger.Error("received non success status when notifying subscriber", "callback", callbackStr, "status", res.Status)
+		}
+	}
+
 }
