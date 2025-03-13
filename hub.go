@@ -79,7 +79,7 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	topic := r.PostFormValue("hub.topic")
 	lease := r.PostFormValue("hub.lease_seconds")
 	secret := r.PostFormValue("hub.secret")
-	h.logger.Info("subscription request", "callback", callback, "mode", mode, "topic", topic, "lease", lease, "secret", secret)
+	h.logger.Info("subscription request", "callback", callback, "mode", mode, "topic", topic, "lease", lease)
 
 	if mode != ModeSubscribe && mode != ModeUnsubscribe {
 		w.WriteHeader(http.StatusBadRequest)
