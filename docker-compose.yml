@@ -2,9 +2,18 @@ services:
   web-sub-client:
     image: modfin/websub-client:latest
     ports:
-      - "1914:1914"
+      - "9998:9998"
     environment:
-      - HOSTNAME=localhost
-      - PORT=1914
-      - HUB_URL=http://host.docker.internal:1913
+      - HOSTNAME=web-sub-client
+      - PORT=9998
+      - HUB_URL=http://hub:9999
       - TOPIC=a-topic
+
+  hub:
+    build:
+      context: ./
+      dockerfile: ./Dockerfile
+    ports:
+      - "9999:9999"
+    environment:
+      - PORT=9999
