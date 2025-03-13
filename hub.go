@@ -49,8 +49,6 @@ func (h *Hub) Mux() *http.ServeMux {
 	return h.mux
 }
 
-type Topic = string
-
 type Subscription struct {
 	CallbackURL   *url.URL
 	Topic         string
@@ -60,8 +58,6 @@ type Subscription struct {
 }
 
 func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
-	h.logger.Debug("/subscribe")
-
 	if err := r.ParseForm(); err != nil {
 		h.logger.Debug(err.Error())
 		w.WriteHeader(http.StatusBadRequest)
@@ -74,6 +70,7 @@ func (h *Hub) handleSubscribe(w http.ResponseWriter, r *http.Request) {
 	topic := r.PostFormValue("hub.topic")
 	lease := r.PostFormValue("hub.lease_seconds")
 	secret := r.PostFormValue("hub.secret")
+
 	h.logger.Info("subscription request", "callback", callback, "mode", mode, "topic", topic, "lease", lease)
 
 	if mode != ModeSubscribe && mode != ModeUnsubscribe {
@@ -187,8 +184,6 @@ func (h *Hub) verifySubscriptionIntent(ctx context.Context, sub *Subscription, m
 }
 
 func (h *Hub) handlePublish(w http.ResponseWriter, r *http.Request) {
-	h.logger.Debug("/publish")
-
 	h.rwMu.RLock()
 	subs := make([]*Subscription, 0, len(h.subscriptions))
 	for _, s := range h.subscriptions {
@@ -207,6 +202,13 @@ func (h *Hub) handlePublish(w http.ResponseWriter, r *http.Request) {
 
 	for _, s := range subs {
 		callbackStr := s.CallbackURL.String()
+
+		if s.LeaseDeadline.Before(time.Now()) {
+			h.rwMu.Lock()
+			delete(h.subscriptions, callbackStr)
+			h.rwMu.Unlock()
+			continue
+		}
 
 		req, err := http.NewRequest("POST", s.CallbackURL.String(), bytes.NewReader(messageData))
 		if err != nil {
